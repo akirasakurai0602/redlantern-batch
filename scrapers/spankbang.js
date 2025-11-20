@@ -4,11 +4,12 @@ puppeteer.use(StealthPlugin());
 
 export async function scrapeSpankbangPage() {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: "new", // ← GitHub Actions 必須
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-blink-features=AutomationControlled",
+      "--disable-dev-shm-usage",
     ],
   });
 
@@ -19,13 +20,13 @@ export async function scrapeSpankbangPage() {
   );
 
   await page.goto("https://spankbang.com/s/asian/", {
-    waitUntil: "networkidle2",
-    timeout: 60000,
+    waitUntil: "domcontentloaded",
+    timeout: 90000,
   });
 
   // 🔥 動画一覧が描画されるまで待機
   await page.waitForSelector('[data-testid="video-item"]', {
-    timeout: 20000,
+    timeout: 30000,
   });
 
   const items = await page.evaluate(() => {
