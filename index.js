@@ -10,7 +10,9 @@ async function main() {
   const list = [...xv, ...sb]; // ←両方結合
 
   for (const item of list) {
-    const { error } = await supabase.from("articles").insert(item);
+    const { error } = await supabase
+      .from("articles")
+      .upsert(items, { onConflict: "url" });
 
     // 重複 (url unique) はスキップ
     if (error) {
