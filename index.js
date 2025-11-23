@@ -12,7 +12,7 @@ async function main() {
   for (const item of list) {
     const { error } = await supabase
       .from("articles")
-      .upsert(items, { onConflict: "url" });
+      .upsert(item, { onConflict: "url" });
 
     // 重複 (url unique) はスキップ
     if (error) {
