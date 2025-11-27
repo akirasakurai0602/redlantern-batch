@@ -2,12 +2,12 @@ import "dotenv/config";
 import { supabase } from "./supabase.js";
 import { scrapeXVideosPage } from "./scrapers/xvideos.js";
 import { scrapeSpankbangPage } from "./scrapers/spankbang.js";
+import { isAsianTitle } from "./filters/asianCheck.js";
 
 /* -------------------------------------------------------
    スパム除外ロジック（広告・釣り動画フィルタ）
 -------------------------------------------------------- */
 
-// タイトルに含まれていたら除外するNGワード
 const NG_TITLE_KEYWORDS = [
   "free",
   "join",
@@ -22,21 +22,16 @@ const NG_TITLE_KEYWORDS = [
   "make money",
 ];
 
-// スパム判定関数（trueなら除外）
 function isSpam(item) {
   const title = item.title?.toLowerCase() ?? "";
 
-  // ① タイトルNGワード
-  if (NG_TITLE_KEYWORDS.some((k) => title.includes(k))) {
-    return true;
-  }
+  // ① タイトルにNGワード
+  if (NG_TITLE_KEYWORDS.some((k) => title.includes(k))) return true;
 
-  // ② サムネイルURLが短すぎる/不正
-  if (!item.thumbnail_url || item.thumbnail_url.length < 20) {
-    return true;
-  }
+  // ② サムネイルURLが短い＝広告の可能性
+  if (!item.thumbnail_url || item.thumbnail_url.length < 20) return true;
 
-  // ③ 動画が短すぎる（5秒未満 → ほぼ広告）
+  // ③ 短すぎる動画（5秒未満）
   if (item.duration) {
     const parts = item.duration.split(":").map(Number);
     const sec = parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
@@ -47,7 +42,7 @@ function isSpam(item) {
 }
 
 /* -------------------------------------------------------
-   メイン処理（スクレイプ → スパム除外 → upsert）
+   メイン処理（スクレイプ → フィルタ → upsert）
 -------------------------------------------------------- */
 
 async function main() {
@@ -59,15 +54,25 @@ async function main() {
 
   // 結合
   let list = [...xv, ...sb];
+  console.log(`▶ Raw scraped: ${list.length} items`);
 
-  // 🧹 スパム除外
-  const beforeCount = list.length;
+  /* -------------------------------
+      🧹 Step1: スパム除外
+  --------------------------------*/
+  const beforeSpam = list.length;
   list = list.filter((item) => !isSpam(item));
-  const afterCount = list.length;
+  console.log(`🧹 Spam filter: ${beforeSpam} → ${list.length}`);
 
-  console.log(`🧹 Spam filter: ${beforeCount} → ${afterCount} items`);
+  /* -------------------------------
+      🈲 Step2: アジア判定フィルタ
+  --------------------------------*/
+  const beforeAsian = list.length;
+  list = list.filter((item) => isAsianTitle(item.title));
+  console.log(`🈯 Asian filter: ${beforeAsian} → ${list.length}`);
 
-  // upsert
+  /* -------------------------------
+      💾 Step3: Supabase upsert
+  --------------------------------*/
   for (const item of list) {
     const { error } = await supabase
       .from("articles")
@@ -75,11 +80,11 @@ async function main() {
 
     if (error) {
       if (error.code === "23505") continue;
-      console.error(error);
+      console.error("Supabase upsert error:", error);
     }
   }
 
-  console.log("✅ DONE. inserted:", list.length);
+  console.log("✅ DONE. Inserted/Updated:", list.length);
 }
 
 main();
