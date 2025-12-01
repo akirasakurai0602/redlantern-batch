@@ -2,7 +2,8 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 puppeteer.use(StealthPlugin());
 
-const MAX_PAGES = 5; // ← 取得ページ数（あとで増やせる）
+// 取得ページ数（必要なら 10 や 20 に増やせる）
+const MAX_PAGES = 5;
 
 export async function scrapeSpankbangPage() {
   const browser = await puppeteer.launch({
@@ -22,12 +23,16 @@ export async function scrapeSpankbangPage() {
 
   const allItems = [];
 
-  // -------------------------
-  // 📌 ページ巡回ループ
-  // -------------------------
+  // ============================
+  //  🔁 ページ巡回ループ
+  // ============================
   for (let i = 1; i <= MAX_PAGES; i++) {
-    const url = `https://spankbang.com/s/asian/${i}/`;
-    console.log(`▶ Fetching page ${i}: ${url}`);
+    const url =
+      i === 1
+        ? "https://spankbang.com/s/asian/"
+        : `https://spankbang.com/s/asian/${i}/`;
+
+    console.log(`▶ Fetching SpankBang page ${i}: ${url}`);
 
     try {
       await page.goto(url, {
@@ -38,11 +43,14 @@ export async function scrapeSpankbangPage() {
       await page.waitForSelector('[data-testid="video-item"]', {
         timeout: 20000,
       });
-    } catch (err) {
-      console.log(`⚠ Page ${i} load failed, stopping.`);
+    } catch (e) {
+      console.log(`⚠ Page ${i} failed → 停止`);
       break;
     }
 
+    // ============================
+    //  🔍 ページ内の video-item を抽出
+    // ============================
     const items = await page.evaluate(() => {
       const results = [];
 
@@ -51,29 +59,34 @@ export async function scrapeSpankbangPage() {
         const img = el.querySelector("img");
 
         const url = a ? "https://spankbang.com" + a.getAttribute("href") : null;
-        const thumbnail = img?.getAttribute("data-src") || img?.src || null;
+        if (!url) return;
+
+        let thumbnail = img?.getAttribute("data-src") || img?.src || null;
+        if (!thumbnail) return;
+
+        // "//tbi.sb-cd.com/..." → "https://tbi.sb-cd.com/..."
+        if (thumbnail.startsWith("//")) {
+          thumbnail = "https:" + thumbnail;
+        }
 
         const titleEl = el.querySelector(
           '[data-testid="video-info-with-badge"] [title]'
         );
-        const title = titleEl?.innerText?.trim() || "";
+        const title = titleEl?.textContent?.trim() || "";
+        if (!title) return; // タイトル無しは除外
 
-        const len = el.querySelector(
-          '[data-testid="video-item-length"]'
-        )?.innerText;
-        const duration = len?.trim() || "";
+        const lenEl = el.querySelector('[data-testid="video-item-length"]');
+        const duration = lenEl?.textContent?.trim() || "";
 
-        if (url && thumbnail) {
-          results.push({
-            url,
-            title,
-            thumbnail_url: thumbnail,
-            duration,
-            source: "spankbang",
-            tags: ["asian"],
-            is_asian: true,
-          });
-        }
+        results.push({
+          url,
+          title,
+          thumbnail_url: thumbnail,
+          duration,
+          source: "spankbang",
+          tags: ["asian"],
+          is_asian: true,
+        });
       });
 
       return results;
