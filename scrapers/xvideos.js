@@ -1,9 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 
-// 取得ページ数（必要に応じて増やせる）
 const MAX_PAGES = 10;
-
 function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -29,18 +27,18 @@ export async function scrapeXVideosPage() {
       $(".thumb-block, .thumb-inside, .video-thumb").each((i, el) => {
         const root = $(el);
 
-        // ------------------------------
-        // URL 取得
-        // ------------------------------
+        // =============================
+        // URL
+        // =============================
         const a = root.find("a").first();
         const href = a.attr("href");
         if (!href || !href.startsWith("/video")) return;
 
         const videoUrl = "https://www.xvideos.com" + href;
 
-        // ------------------------------
-        // タイトル取得（最重要）
-        // ------------------------------
+        // =============================
+        // Title
+        // =============================
         let title =
           root.find(".title").text().trim() ||
           a.attr("title")?.trim() ||
@@ -49,9 +47,9 @@ export async function scrapeXVideosPage() {
 
         if (!title) return;
 
-        // ------------------------------
-        // サムネイル取得
-        // ------------------------------
+        // =============================
+        // Thumbnail
+        // =============================
         let thumbnail =
           root.find("img").attr("data-src") ||
           root.find("img").attr("src") ||
@@ -63,18 +61,33 @@ export async function scrapeXVideosPage() {
           thumbnail = "https:" + thumbnail;
         }
 
+        // =============================
+        // ⭐ Duration（3パターン対応）
+        // =============================
+        let duration =
+          root.find(".duration").text().trim() ||
+          root.find(".video-duration").text().trim() ||
+          root.find(".thumb-under-duration").text().trim() ||
+          "";
+
+        // 空なら undefined に
+        if (!duration) duration = null;
+
+        // =============================
+        // push
+        // =============================
         items.push({
           url: videoUrl,
           title,
           thumbnail_url: thumbnail,
+          duration,
           source: "xvideos",
           tags: ["asian"],
           is_asian: true,
         });
       });
 
-      // Ban 回避：少し待つ
-      await sleep(200 + Math.random() * 250);
+      await sleep(200 + Math.random() * 250); // BAN 回避
     } catch (err) {
       console.warn(`⚠ XVideos page ${page} failed, skipping...`);
       continue;

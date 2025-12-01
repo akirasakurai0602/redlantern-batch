@@ -41,6 +41,34 @@ function isSpam(item) {
 }
 
 /* -------------------------------------------------------
+   🔥 追加：10分未満動画は除外
+-------------------------------------------------------- */
+function parseDuration(str) {
+  if (!str) return 0;
+  str = str.toLowerCase().trim();
+
+  // 形式 A: "12:33"
+  if (str.includes(":")) {
+    const [m, s] = str.split(":").map(Number);
+    return (m || 0) * 60 + (s || 0);
+  }
+
+  // 形式 B: "13m" / "13 min"
+  if (str.includes("m")) {
+    const m = parseInt(str);
+    return m * 60;
+  }
+
+  // 形式 C: "125" (秒っぽい数字)
+  if (/^\d+$/.test(str)) {
+    return parseInt(str);
+  }
+
+  // 不明
+  return 0;
+}
+
+/* -------------------------------------------------------
    メイン処理
 -------------------------------------------------------- */
 
@@ -91,21 +119,33 @@ async function main() {
   console.log(`🧹 Spam filter: ${beforeSpam} → ${list.length}`);
 
   /* -------------------------------
-      Step4: タイトルによるアジア判定
+      Step4: 10分未満動画除外（今回追加）
+  --------------------------------*/
+  const beforeDuration = list.length;
+
+  list = list.filter((item) => {
+    const sec = parseDuration(item.duration);
+    return sec >= 600; // 10分(600秒)以上だけ残す
+  });
+
+  console.log(`⏱ Duration filter (<10min): ${beforeDuration} → ${list.length}`);
+
+  /* -------------------------------
+      Step5: タイトルによるアジア判定
   --------------------------------*/
   const beforeAsian = list.length;
   list = list.filter((item) => isAsianTitle(item.title));
   console.log(`🈯 Asian-title filter: ${beforeAsian} → ${list.length}`);
 
   /* -------------------------------
-      Step5: DB既存URL除外（AI判定はコスト高）
+      Step6: DB既存URL除外
   --------------------------------*/
   const beforeDup = list.length;
   list = list.filter((item) => !existing.has(item.url));
   console.log(`🚫 Duplicate filter: ${beforeDup} → ${list.length}`);
 
   /* -------------------------------
-      Step6: AIアジア顔判定（高精度）
+      Step7: AIアジア顔判定（高精度）
   --------------------------------*/
   console.log("🧠 Running AI Asian-face detection…");
   const finalList = [];
@@ -118,26 +158,25 @@ async function main() {
         continue;
       }
 
-      item.is_asian_ai = true; // DBに保存する用
+      item.is_asian_ai = true;
       finalList.push(item);
     } catch (err) {
-      console.log("AI error:", err);
+      console.log("AI Asian check error:", err);
     }
   }
 
   console.log(`✔ AI Asian filter: ${list.length} → ${finalList.length}`);
 
   /* -------------------------------
-      Step7: DB upsert
+      Step8: DB upsert
   --------------------------------*/
   let inserted = 0;
   for (const item of finalList) {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("articles")
       .upsert(item, { onConflict: "url" });
 
-    if (error) console.log(error);
-    else inserted++;
+    if (!error) inserted++;
   }
 
   console.log("=====================================");
