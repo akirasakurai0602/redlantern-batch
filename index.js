@@ -82,6 +82,24 @@ function normalizeTitle(title) {
   return title?.trim().toLowerCase().replace(/\s+/g, " "); // 連続スペース除去
 }
 
+function extractVideoId(item) {
+  const url = item.url;
+
+  // SpankBang → /12345/video/
+  const sb = url.match(/spankbang\.com\/(\w+)\//);
+  if (sb) return `spankbang_${sb[1]}`;
+
+  // XVideos → video123456/
+  const xv = url.match(/xvideos\.com\/video(\d+)\//);
+  if (xv) return `xvideos_${xv[1]}`;
+
+  // JavyNow → video/123456/
+  const jn = url.match(/javynow\.com\/video\/(\d+)\//);
+  if (jn) return `javynow_${jn[1]}`;
+
+  return null;
+}
+
 /* -------------------------------------------------------
    メイン処理
 -------------------------------------------------------- */
@@ -200,6 +218,8 @@ async function main() {
   for (const raw of finalList) {
     const item = { ...raw };
     delete item.vid;
+    item.video_id = extractVideoId(item);
+    if (!item.video_id) continue;
 
     const keyUrl = normalizeUrlKey(item.url);
     const keyTitle = normalizeTitle(item.title);
@@ -217,7 +237,7 @@ async function main() {
 
     const { error } = await supabase
       .from("articles")
-      .upsert(item, { onConflict: "url" });
+      .upsert(item, { onConflict: "video_id" });
 
     if (error) {
       failed++;
