@@ -69,13 +69,17 @@ function parseDuration(str) {
   return 0;
 }
 
-function normalizeURL(url) {
-  if (!url) return url;
+function normalizeUrlKey(url) {
+  if (!url) return "";
   return url
-    .replace(/\/$/, "") // 末尾スラッシュ削除
-    .replace(/\?.*$/, "") // クエリ削除
     .trim()
-    .toLowerCase(); // 大文字小文字統一
+    .replace(/^https?:\/\//, "") // スキーム削除
+    .replace(/\/+$/, "") // 末尾スラッシュ削除
+    .toLowerCase();
+}
+
+function normalizeTitle(title) {
+  return title?.trim().toLowerCase().replace(/\s+/g, " "); // 連続スペース除去
 }
 
 /* -------------------------------------------------------
@@ -94,20 +98,25 @@ async function main() {
   await loadFaceModels();
 
   /* -------------------------------
-      Step1: DBの既存URLロード
+    Step1: DBの既存URLロード
   --------------------------------*/
   console.log("📌 Loading existing URLs…");
   const { data: existingRows, error: exErr } = await supabase
     .from("articles")
-    .select("url");
+    .select("url, title");
 
   if (exErr) {
     console.error("❌ DB load error:", exErr);
     return;
   }
 
-  const existing = new Set(existingRows.map((r) => normalizeURL(r.url)));
-  console.log(`✔ Existing URLs loaded: ${existing.size}`);
+  const existingKeySet = new Set(
+    existingRows.map((r) => normalizeUrlKey(r.url))
+  );
+
+  const existingTitleSet = new Set(
+    existingRows.map((r) => normalizeTitle(r.title))
+  );
 
   /* -------------------------------
       Step2: スクレイピング
@@ -144,21 +153,22 @@ async function main() {
   console.log(`⏱ Duration filter (<10min): ${beforeDuration} → ${list.length}`);
 
   /* -------------------------------
-      Step5: タイトルによるアジア判定
-  --------------------------------*/
-  const beforeAsian = list.length;
-  list = list.filter((item) => isAsianTitle(item.title));
-  console.log(`🈯 Asian-title filter: ${beforeAsian} → ${list.length}`);
-
-  /* -------------------------------
-      Step6: DB既存URL除外
+    Step5: DB既存URL除外
   --------------------------------*/
   const beforeDup = list.length;
-  list = list.filter((item) => !existing.has(item.url));
-  console.log(`🚫 Duplicate filter: ${beforeDup} → ${list.length}`);
+
+  list = list.filter((item) => {
+    const key = normalizeUrlKey(item.url);
+    return !existingKeySet.has(key); // 既存でないものだけ残す
+  });
+
+  const removedDup = beforeDup - list.length;
+  console.log(
+    `🚫 Duplicate filter: removed ${removedDup}, remain ${list.length}`
+  );
 
   /* -------------------------------
-      Step7: AIアジア顔判定（高精度）
+      Step6: AIアジア顔判定（高精度）
   --------------------------------*/
   console.log("🧠 Running AI Asian-face detection…");
   const finalList = [];
@@ -181,17 +191,29 @@ async function main() {
   console.log(`✔ AI Asian filter: ${list.length} → ${finalList.length}`);
 
   /* -------------------------------
-      Step8: DB upsert
-　--------------------------------*/
+    Step7: DB upsert
+--------------------------------*/
   let inserted = 0;
   let updated = 0;
   let failed = 0;
 
-  for (const item of finalList) {
+  for (const raw of finalList) {
+    const item = { ...raw };
     delete item.vid;
 
-    const isUpdate = existing.has(item.url);
-    console.log(isUpdate ? "UPDATE → " + item.url : "INSERT → " + item.url);
+    const keyUrl = normalizeUrlKey(item.url);
+    const keyTitle = normalizeTitle(item.title);
+
+    const existsByUrl = existingKeySet.has(keyUrl);
+    const existsByTitle = existingTitleSet.has(keyTitle);
+
+    const shouldBeUpdate = existsByUrl || existsByTitle;
+
+    console.log(
+      shouldBeUpdate
+        ? "UPDATE? → " + item.url + " | " + item.title
+        : "INSERT? → " + item.url + " | " + item.title
+    );
 
     const { error } = await supabase
       .from("articles")
@@ -203,8 +225,12 @@ async function main() {
       continue;
     }
 
-    if (isUpdate) updated++;
+    if (shouldBeUpdate) updated++;
     else inserted++;
+
+    // セットを更新（次の比較に使う）
+    existingKeySet.add(keyUrl);
+    existingTitleSet.add(keyTitle);
   }
 
   console.log("=====================================");
