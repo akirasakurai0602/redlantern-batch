@@ -215,10 +215,16 @@ async function main() {
       Step8: DB upsert（video_id基準）
   --------------------------------*/
   let inserted = 0;
+  let updated = 0;
   let failed = 0;
 
   for (const item of finalList) {
     delete item.vid;
+
+    const vid = item.video_id;
+    const isUpdate = existingVideoIdSet.has(vid);
+
+    // DB反映
     const { error } = await supabase
       .from("articles")
       .upsert(item, { onConflict: "video_id" });
@@ -226,14 +232,22 @@ async function main() {
     if (error) {
       failed++;
       console.error("Upsert error:", error);
+      continue;
+    }
+
+    // 判定処理
+    if (isUpdate) {
+      updated++;
     } else {
       inserted++;
+      existingVideoIdSet.add(vid); // 今後の判定用にSetを更新
     }
   }
 
   console.log("=====================================");
-  console.log(`✔ New Inserts (video_id-based) : ${inserted}`);
-  console.log(`✔ Failed      : ${failed}`);
+  console.log(`✔ Inserts : ${inserted}`);
+  console.log(`✔ Updates : ${updated}`);
+  console.log(`✔ Failed  : ${failed}`);
   console.log("=====================================");
 }
 
