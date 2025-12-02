@@ -85,15 +85,15 @@ function normalizeTitle(title) {
 function extractVideoId(item) {
   const url = item.url;
 
-  // SpankBang → /12345/video/
-  const sb = url.match(/spankbang\.com\/(\w+)\//);
+  // SpankBang: spankbang.com/VIDEOID/...
+  const sb = url.match(/spankbang\.com\/([^\/]+)/);
   if (sb) return `spankbang_${sb[1]}`;
 
-  // XVideos → video123456/
+  // XVideos: xvideos.com/video123456/
   const xv = url.match(/xvideos\.com\/video(\d+)\//);
   if (xv) return `xvideos_${xv[1]}`;
 
-  // JavyNow → video/123456/
+  // JavyNow: javynow.com/video/123456/
   const jn = url.match(/javynow\.com\/video\/(\d+)\//);
   if (jn) return `javynow_${jn[1]}`;
 
