@@ -69,6 +69,15 @@ function parseDuration(str) {
   return 0;
 }
 
+function normalizeURL(url) {
+  if (!url) return url;
+  return url
+    .replace(/\/$/, "") // 末尾スラッシュ削除
+    .replace(/\?.*$/, "") // クエリ削除
+    .trim()
+    .toLowerCase(); // 大文字小文字統一
+}
+
 /* -------------------------------------------------------
    メイン処理
 -------------------------------------------------------- */
@@ -97,7 +106,7 @@ async function main() {
     return;
   }
 
-  const existing = new Set(existingRows.map((r) => r.url));
+  const existing = new Set(existingRows.map((r) => normalizeURL(r.url)));
   console.log(`✔ Existing URLs loaded: ${existing.size}`);
 
   /* -------------------------------
@@ -173,18 +182,35 @@ async function main() {
 
   /* -------------------------------
       Step8: DB upsert
-  --------------------------------*/
+　--------------------------------*/
   let inserted = 0;
+  let updated = 0;
+  let failed = 0;
+
   for (const item of finalList) {
+    delete item.vid;
+
+    const isUpdate = existing.has(item.url);
+    console.log(isUpdate ? "UPDATE → " + item.url : "INSERT → " + item.url);
+
     const { error } = await supabase
       .from("articles")
       .upsert(item, { onConflict: "url" });
 
-    if (!error) inserted++;
+    if (error) {
+      failed++;
+      console.error("Upsert error:", error);
+      continue;
+    }
+
+    if (isUpdate) updated++;
+    else inserted++;
   }
 
   console.log("=====================================");
-  console.log(`✔ DONE. Inserted new AI-verified items: ${inserted}`);
+  console.log(`✔ New Inserts : ${inserted}`);
+  console.log(`✔ Updated     : ${updated}`);
+  console.log(`✔ Failed      : ${failed}`);
   console.log("=====================================");
 }
 

@@ -17,42 +17,56 @@ export async function scrapeJavyNowPage() {
 
   const page = await browser.newPage();
 
+  // ================================
+  // 📌 画像キャプチャ設定
+  // ================================
+  await page.setRequestInterception(true);
+
+  let imageUrls = new Map(); // key: vid, value: thumbnail URL
+
+  page.on("request", (req) => {
+    if (req.resourceType() === "image") {
+      const url = req.url();
+
+      if (url.includes("img.javynow.com")) {
+        const match = url.match(/files\/(\d+)\/(\d+)\.jpg/);
+        if (match) {
+          const vid = match[2];
+          imageUrls.set(vid, url);
+        }
+      }
+    }
+    req.continue();
+  });
+
   await page.setUserAgent(
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
   );
 
-  const allItems = [];
+  const BASE = "https://javynow.com/search/asian";
 
+  const all = [];
+  const seen = new Set();
+
+  // ================================
+  // 🔁 ページ巡回
+  // ================================
   for (let i = 1; i <= MAX_PAGES; i++) {
-    const url =
-      i === 1
-        ? "https://javynow.com/search/asian"
-        : `https://javynow.com/search/asian?page=${i}`;
-
+    const url = i === 1 ? BASE : `${BASE}?p=${i}`;
     console.log(`▶ JavyNow Page ${i}: ${url}`);
+    imageUrls.clear();
 
     try {
-      await page.goto(url, {
-        waitUntil: "domcontentloaded",
-        timeout: 90000,
-      });
-
-      // 🔥 LazyLoad を強制実行 → data-src を src にセット
-      await page.evaluate(() => {
-        document.querySelectorAll("img[data-src]").forEach((img) => {
-          if (img.dataset.src) {
-            img.src = img.dataset.src; // ← 強制的に本物を読ませる
-          }
-        });
-      });
-
-      // ".video" が描画されるまで待機
+      await page.goto(url, { waitUntil: "networkidle2", timeout: 90000 });
       await page.waitForSelector(".video", { timeout: 20000 });
     } catch (e) {
-      console.log(`⚠ Page ${i} failed, stopping.`);
+      console.log("⚠︎ JavyNow failed:", e.message);
       break;
     }
 
+    // ================================
+    // 🎯 メイン情報を取得
+    // ================================
     const items = await page.evaluate(() => {
       const arr = [];
 
@@ -61,47 +75,48 @@ export async function scrapeJavyNowPage() {
         if (!a) return;
 
         const href = a.getAttribute("href");
-        if (!href) return;
-
-        const videoUrl = "https://javynow.com" + href;
-
-        const img = el.querySelector(".video__thumb img");
-
-        // 🔥 data-src 更新後なので src に高解像度が入る
-        let thumb = img?.getAttribute("src") || "";
-
-        if (!thumb) return;
-        if (thumb.startsWith("//")) thumb = "https:" + thumb;
-
+        const vid = el.getAttribute("data-vid");
         const title =
           el.querySelector(".video__title")?.textContent?.trim() || "";
-
         const duration =
           el.querySelector(".video__duration__value")?.textContent?.trim() ||
           "";
 
-        if (!title) return;
+        if (!href || !vid) return;
 
         arr.push({
-          url: videoUrl,
+          vid,
+          url: "https://javynow.com" + href,
           title,
-          thumbnail_url: thumb,
           duration,
-          source: "javynow",
-          tags: ["asian"],
-          is_asian: true,
         });
       });
 
       return arr;
     });
 
-    console.log(`✔ Page ${i}: ${items.length} items`);
-    allItems.push(...items);
+    // ================================
+    // 🖼 サムネ紐付け & 重複排除
+    // ================================
+    for (const it of items) {
+      it.thumbnail_url = imageUrls.get(it.vid) || null;
+      it.tags = ["asian"];
+      it.is_asian = true;
+      it.source = "javynow";
+
+      if (seen.has(it.url)) continue; // 重複防止
+      seen.add(it.url);
+
+      all.push(it); // ← pushは1回だけ
+    }
+
+    console.log(
+      `✔ Page ${i}: Added ${items.length} items (unique so far: ${all.length})`
+    );
   }
 
   await browser.close();
-  console.log(`🔥 JavyNow fetched total: ${allItems.length}`);
 
-  return allItems;
+  console.log(`🔥 JavyNow fetched total unique: ${all.length}`);
+  return all;
 }
