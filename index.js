@@ -33,8 +33,8 @@ function isSpam(item) {
   if (!item.thumbnail_url || item.thumbnail_url.length < 20) return true;
 
   if (item.duration) {
-    const parts = item.duration.split(":").map(Number);
-    const sec = parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
+    const [m, s] = item.duration.split(":").map(Number);
+    const sec = (m || 0) * 60 + (s || 0);
     if (sec > 0 && sec < 5) return true;
   }
 
@@ -42,46 +42,41 @@ function isSpam(item) {
 }
 
 /* -------------------------------------------------------
-   🔥 追加：10分未満動画は除外
+   🔥 10分未満動画を除外
 -------------------------------------------------------- */
 function parseDuration(str) {
   if (!str) return 0;
   str = str.toLowerCase().trim();
 
-  // 形式 A: "12:33"
   if (str.includes(":")) {
     const [m, s] = str.split(":").map(Number);
     return (m || 0) * 60 + (s || 0);
   }
-
-  // 形式 B: "13m" / "13 min"
   if (str.includes("m")) {
-    const m = parseInt(str);
-    return m * 60;
+    return parseInt(str) * 60;
   }
-
-  // 形式 C: "125" (秒っぽい数字)
   if (/^\d+$/.test(str)) {
     return parseInt(str);
   }
-
-  // 不明
   return 0;
 }
 
-function normalizeUrlKey(url) {
-  if (!url) return "";
-  return url
+/* -------------------------------------------------------
+   正規化
+-------------------------------------------------------- */
+const normalizeUrlKey = (url) =>
+  url
     .trim()
-    .replace(/^https?:\/\//, "") // スキーム削除
-    .replace(/\/+$/, "") // 末尾スラッシュ削除
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "")
     .toLowerCase();
-}
 
-function normalizeTitle(title) {
-  return title?.trim().toLowerCase().replace(/\s+/g, " "); // 連続スペース除去
-}
+const normalizeTitle = (title) =>
+  title?.trim().toLowerCase().replace(/\s+/g, " ") ?? "";
 
+/* -------------------------------------------------------
+   🔥 video_id 抽出（最重要！）
+-------------------------------------------------------- */
 function extractVideoId(item) {
   const url = item.url;
 
@@ -116,25 +111,32 @@ async function main() {
   await loadFaceModels();
 
   /* -------------------------------
-    Step1: DBの既存URLロード
+      Step1: 既存 video_id をロード
   --------------------------------*/
-  console.log("📌 Loading existing URLs…");
+  console.log("📌 Loading existing video IDs…");
+
   const { data: existingRows, error: exErr } = await supabase
     .from("articles")
-    .select("url, title");
+    .select("video_id, url, title");
 
   if (exErr) {
     console.error("❌ DB load error:", exErr);
     return;
   }
 
-  const existingKeySet = new Set(
+  const existingVideoIdSet = new Set(
+    existingRows.map((r) => r.video_id).filter((x) => x)
+  );
+
+  const existingUrlSet = new Set(
     existingRows.map((r) => normalizeUrlKey(r.url))
   );
 
   const existingTitleSet = new Set(
     existingRows.map((r) => normalizeTitle(r.title))
   );
+
+  console.log(`✔ Existing video_ids: ${existingVideoIdSet.size}`);
 
   /* -------------------------------
       Step2: スクレイピング
@@ -159,34 +161,35 @@ async function main() {
   console.log(`🧹 Spam filter: ${beforeSpam} → ${list.length}`);
 
   /* -------------------------------
-      Step4: 10分未満動画除外（今回追加）
+      Step4: 10分未満除外
   --------------------------------*/
   const beforeDuration = list.length;
-
-  list = list.filter((item) => {
-    const sec = parseDuration(item.duration);
-    return sec >= 600; // 10分(600秒)以上だけ残す
-  });
-
+  list = list.filter((item) => parseDuration(item.duration) >= 600);
   console.log(`⏱ Duration filter (<10min): ${beforeDuration} → ${list.length}`);
 
   /* -------------------------------
-    Step5: DB既存URL除外
+      Step5: video_id を付与し、null は除外
+  --------------------------------*/
+  let beforeVid = list.length;
+  list = list
+    .map((item) => ({ ...item, video_id: extractVideoId(item) }))
+    .filter((item) => item.video_id);
+
+  console.log(`🔑 Video ID filter: ${beforeVid} → ${list.length}`);
+
+  /* -------------------------------
+      Step6: DBに video_id があるものを完全除外
   --------------------------------*/
   const beforeDup = list.length;
-
-  list = list.filter((item) => {
-    const key = normalizeUrlKey(item.url);
-    return !existingKeySet.has(key); // 既存でないものだけ残す
-  });
-
+  list = list.filter((item) => !existingVideoIdSet.has(item.video_id));
   const removedDup = beforeDup - list.length;
+
   console.log(
-    `🚫 Duplicate filter: removed ${removedDup}, remain ${list.length}`
+    `🚫 Duplicate filter by video_id: removed ${removedDup}, remain ${list.length}`
   );
 
   /* -------------------------------
-      Step6: AIアジア顔判定（高精度）
+      Step7: AIアジア顔判定
   --------------------------------*/
   console.log("🧠 Running AI Asian-face detection…");
   const finalList = [];
@@ -209,32 +212,13 @@ async function main() {
   console.log(`✔ AI Asian filter: ${list.length} → ${finalList.length}`);
 
   /* -------------------------------
-    Step7: DB upsert
---------------------------------*/
+      Step8: DB upsert（video_id基準）
+  --------------------------------*/
   let inserted = 0;
-  let updated = 0;
   let failed = 0;
 
-  for (const raw of finalList) {
-    const item = { ...raw };
+  for (const item of finalList) {
     delete item.vid;
-    item.video_id = extractVideoId(item);
-    if (!item.video_id) continue;
-
-    const keyUrl = normalizeUrlKey(item.url);
-    const keyTitle = normalizeTitle(item.title);
-
-    const existsByUrl = existingKeySet.has(keyUrl);
-    const existsByTitle = existingTitleSet.has(keyTitle);
-
-    const shouldBeUpdate = existsByUrl || existsByTitle;
-
-    console.log(
-      shouldBeUpdate
-        ? "UPDATE? → " + item.url + " | " + item.title
-        : "INSERT? → " + item.url + " | " + item.title
-    );
-
     const { error } = await supabase
       .from("articles")
       .upsert(item, { onConflict: "video_id" });
@@ -242,20 +226,13 @@ async function main() {
     if (error) {
       failed++;
       console.error("Upsert error:", error);
-      continue;
+    } else {
+      inserted++;
     }
-
-    if (shouldBeUpdate) updated++;
-    else inserted++;
-
-    // セットを更新（次の比較に使う）
-    existingKeySet.add(keyUrl);
-    existingTitleSet.add(keyTitle);
   }
 
   console.log("=====================================");
-  console.log(`✔ New Inserts : ${inserted}`);
-  console.log(`✔ Updated     : ${updated}`);
+  console.log(`✔ New Inserts (video_id-based) : ${inserted}`);
   console.log(`✔ Failed      : ${failed}`);
   console.log("=====================================");
 }
