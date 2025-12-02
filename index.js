@@ -2,6 +2,7 @@ import "dotenv/config";
 import { supabase } from "./supabase.js";
 import { scrapeXVideosPage } from "./scrapers/xvideos.js";
 import { scrapeSpankbangPage } from "./scrapers/spankbang.js";
+import { scrapeJavyNowPage } from "./scrapers/javynow.js";
 import { isAsianTitle } from "./filters/asianCheck.js";
 import { loadFaceModels } from "./models/loadModels.js";
 import { isAsianFace } from "./filters/asianCheckAI.js";
@@ -108,7 +109,10 @@ async function main() {
   console.log("▶ Fetching spankbang...");
   const sb = await scrapeSpankbangPage();
 
-  let list = [...xv, ...sb];
+  console.log("▶ Fetching JavyNow...");
+  const jn = await scrapeJavyNowPage();
+
+  let list = [...xv, ...sb, ...jn];
   console.log(`📌 Raw scraped: ${list.length} items`);
 
   /* -------------------------------
