@@ -2,8 +2,12 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 puppeteer.use(StealthPlugin());
 
-const MAX_PAGES = 15; // ← 取得ページ数
-const CONCURRENCY = 3; // ← 同時に開くページ数（3〜5推奨）
+const MAX_PAGES = 12;
+const CONCURRENCY = 3;
+
+const BASE = "https://spankbang.com";
+
+const CATEGORIES = ["japanese", "korean", "chinese"]; // ← これだけ回す
 
 export async function scrapeSpankbangPage() {
   const browser = await puppeteer.launch({
@@ -18,10 +22,7 @@ export async function scrapeSpankbangPage() {
 
   const allItems = [];
 
-  // ======================================
-  // 🔥 指定ページを1つだけ処理する関数
-  // ======================================
-  async function scrapeSinglePage(pageNum) {
+  async function scrapeSingle(category, pageNum) {
     const page = await browser.newPage();
     await page.setUserAgent(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
@@ -29,93 +30,117 @@ export async function scrapeSpankbangPage() {
 
     const url =
       pageNum === 1
-        ? "https://spankbang.com/s/asian/"
-        : `https://spankbang.com/s/asian/${pageNum}/`;
+        ? `${BASE}/s/${category}/`
+        : `${BASE}/s/${category}/${pageNum}/`;
 
-    console.log(`▶ SpankBang Fetch Page ${pageNum}: ${url}`);
+    console.log(`▶ SpankBang [${category}] Page ${pageNum}: ${url}`);
 
     try {
       await page.goto(url, {
         waitUntil: "domcontentloaded",
-        timeout: 90000,
+        timeout: 80000,
       });
 
+      // video-itemが表示されるのを待つ
       await page.waitForSelector('[data-testid="video-item"]', {
         timeout: 20000,
       });
-
-      const items = await page.evaluate(() => {
-        const results = [];
-
-        document
-          .querySelectorAll('[data-testid="video-item"]')
-          .forEach((el) => {
-            const a = el.querySelector("a");
-            const img = el.querySelector("img");
-
-            const url = a
-              ? "https://spankbang.com" + a.getAttribute("href")
-              : null;
-            if (!url) return;
-
-            let thumbnail = img?.getAttribute("data-src") || img?.src || null;
-            if (!thumbnail) return;
-
-            if (thumbnail.startsWith("//")) {
-              thumbnail = "https:" + thumbnail;
-            }
-
-            const titleEl = el.querySelector(
-              '[data-testid="video-info-with-badge"] [title]'
-            );
-            const title = titleEl?.textContent?.trim() || "";
-            if (!title) return;
-
-            const lenEl = el.querySelector('[data-testid="video-item-length"]');
-            const duration = lenEl?.textContent?.trim() || "";
-
-            results.push({
-              url,
-              title,
-              thumbnail_url: thumbnail,
-              duration,
-              source: "spankbang",
-              tags: ["asian"],
-              is_asian: true,
-            });
-          });
-
-        return results;
-      });
-
-      console.log(`✔ Page ${pageNum} → ${items.length} items`);
-
-      await page.close();
-      return items;
-    } catch (err) {
-      console.log(`⚠ Page ${pageNum} failed`);
+    } catch (e) {
+      console.log(`⚠ [${category}] Page ${pageNum} failed`);
       await page.close();
       return [];
     }
+
+    const items = await page.evaluate(() => {
+      function slugToTitle(href) {
+        try {
+          const m = href.match(/\/video\/([^\/]+)/);
+          if (!m) return null;
+
+          return decodeURIComponent(m[1])
+            .replace(/\+/g, " ")
+            .replace(/-/g, " ")
+            .trim();
+        } catch {
+          return null;
+        }
+      }
+
+      const results = [];
+
+      document.querySelectorAll('[data-testid="video-item"]').forEach((el) => {
+        const a = el.querySelector("a");
+        if (!a) return;
+
+        const url = "https://spankbang.com" + a.getAttribute("href");
+
+        let img = el.querySelector("img");
+        let thumbnail = img?.getAttribute("data-src") || img?.src || "";
+        if (!thumbnail) return;
+        if (thumbnail.startsWith("//")) thumbnail = "https:" + thumbnail;
+
+        // 🔥 タイトル取得（最優先：h2）
+        let title =
+          el.querySelector(".video__title")?.textContent?.trim() ||
+          el
+            .querySelector('[data-testid="video-info-with-badge"] h2')
+            ?.textContent?.trim() ||
+          "";
+
+        // 🔥 Fallback：slug からタイトル生成
+        if (!title || title.length < 3) {
+          const generated = slugToTitle(a.getAttribute("href"));
+          if (generated) title = generated;
+        }
+
+        if (!title || title.length < 3) return;
+
+        // duration の場所（英語版用）
+        const durationEl = el.querySelector(
+          ".video-item-length, .duration, [data-testid='video-item-length']"
+        );
+        const duration = durationEl?.textContent?.trim() || "";
+
+        results.push({
+          url,
+          title,
+          thumbnail_url: thumbnail,
+          duration,
+          source: "spankbang",
+          tags: ["asian"],
+          is_asian: true,
+        });
+      });
+
+      return results;
+    });
+
+    console.log(`✔ [${category}] Page ${pageNum} → ${items.length} items`);
+
+    await page.close();
+    return items;
   }
 
-  // ======================================
-  // 🔥 並列実行（バッチ処理）
-  // ======================================
-  const pageNumbers = Array.from({ length: MAX_PAGES }, (_, i) => i + 1);
+  // 全カテゴリ × 全ページのタスク生成
+  const tasks = [];
+  for (const cat of CATEGORIES) {
+    for (let p = 1; p <= MAX_PAGES; p++) {
+      tasks.push({ cat, p });
+    }
+  }
 
-  for (let i = 0; i < pageNumbers.length; i += CONCURRENCY) {
-    const batch = pageNumbers.slice(i, i + CONCURRENCY);
-
-    console.log(`🚀 Running batch: ${batch.join(", ")}`);
-
-    const results = await Promise.all(batch.map((p) => scrapeSinglePage(p)));
+  // バッチ処理（3並列）
+  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+    const batch = tasks.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map((t) => scrapeSingle(t.cat, t.p))
+    );
 
     results.forEach((items) => allItems.push(...items));
   }
 
   await browser.close();
-  console.log(`🔥 SpankBang total fetched: ${allItems.length}`);
 
+  console.log(`🔥 Total SpankBang fetched: ${allItems.length}`);
   return allItems;
 }
