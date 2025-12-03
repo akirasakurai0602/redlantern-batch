@@ -212,8 +212,8 @@ async function main() {
   console.log(`✔ AI Asian filter: ${list.length} → ${finalList.length}`);
 
   /* -------------------------------
-      Step8: DB upsert（video_id基準）
-  --------------------------------*/
+    Step8: DB upsert（video_id基準）
+--------------------------------*/
   let inserted = 0;
   let updated = 0;
   let failed = 0;
@@ -221,33 +221,38 @@ async function main() {
   for (const item of finalList) {
     delete item.vid;
 
-    const vid = item.video_id;
-    const isUpdate = existingVideoIdSet.has(vid);
-
-    // DB反映
-    const { error } = await supabase
+    // upsert しつつ、結果レコードを取得
+    const { data, error } = await supabase
       .from("articles")
-      .upsert(item, { onConflict: "video_id" });
+      .upsert(item, { onConflict: "video_id" })
+      .select(); // ← これが重要！
 
-    if (error) {
+    if (error || !data || data.length === 0) {
       failed++;
       console.error("Upsert error:", error);
       continue;
     }
 
-    // 判定処理
-    if (isUpdate) {
-      updated++;
-    } else {
+    const row = data[0];
+
+    // created_at を基準に insert/update を判定
+    const createdAt = new Date(row.created_at).getTime();
+    const now = Date.now();
+
+    // 3秒以内なら「今回新規insert」と判定する
+    if (Math.abs(now - createdAt) < 3000) {
       inserted++;
-      existingVideoIdSet.add(vid); // 今後の判定用にSetを更新
+      console.log(`🆕 INSERT : ${item.video_id} | ${item.title}`);
+    } else {
+      updated++;
+      console.log(`♻ UPDATE : ${item.video_id} | ${item.title}`);
     }
   }
 
   console.log("=====================================");
-  console.log(`✔ Inserts : ${inserted}`);
-  console.log(`✔ Updates : ${updated}`);
-  console.log(`✔ Failed  : ${failed}`);
+  console.log(`✔ New Inserts (video_id-based) : ${inserted}`);
+  console.log(`✔ Updates                      : ${updated}`);
+  console.log(`✔ Failed                       : ${failed}`);
   console.log("=====================================");
 }
 
